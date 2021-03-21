@@ -1,0 +1,206 @@
+// Import relevant libraries for DHT sensor
+#include <DHT.h>
+#include <DHT_U.h>
+
+// DHT REQUIRES the following Arduino libraries:
+// - DHT Sensor Library: https://github.com/adafruit/DHT-sensor-library
+// - Adafruit Unified Sensor Lib: https://github.com/adafruit/Adafruit_Sensor
+
+#include "DHT.h"
+#define DHTPIN 6     // Digital pin connected to the DHT sensor
+#define DHTTYPE DHT11   // DHT 11
+// for dht
+// Connect pin 1 (on the left) of the sensor to +5V
+// Connect pin 2 of the sensor to whatever your DHTPIN is (d6)
+// Connect pin 3 (on the right) of the sensor to GROUND
+// Connect a 10K resistor from pin 2 (data) to pin 1 (power) of the sensor
+
+// Initialize DHT sensor.
+DHT dht=DHT(DHTPIN, DHTTYPE);
+
+// Water level sensor initialise (LEVELS NEED TESTING IN SOIL 0 dry, approx 150 wet?)
+#define waterSensorPin A1 
+const int waterSensorPower=8;
+int waterSensorValue = 0;
+const int waterthreshold=25; // Binary threshold for water level
+
+//LED indicator for water level sensor initialise 
+const int redLEDPin=9;
+const int greenLEDPin=10;//connect LED pins to 9 & 10 digital pins 
+
+//Photoresistor pin initialisation
+const int pResistor = A0; // Plug photoresistor into 5V and A1, with 10K resistor
+int lightvalue;          // Store value from photoresistor (0-1023)
+const int lightthreshold=400; // Binary threshold for light level
+
+//Relay switch pin initialisation
+const int relayPin=13;// Connect relay switch signal pin to D13
+
+// IR Reciever
+#include <IRremote.h> // IR Remote Library
+const int recv_pin = 7; // Sets IR pin DIGITAL 7
+IRrecv irrecv(recv_pin); 
+decode_results results; // output from IR receiver
+
+// LCD
+#include <LiquidCrystal.h> // Library
+const int contrast = 75; // Contrast of LCD
+LiquidCrystal lcd(12, 11, 2, 3, 4, 5); // Initialize LCD Pins
+
+//Timer
+unsigned long Hour24Start, startTime, endTime, Hour24End, sunlightThisPeriod, sunlightTime;
+bool timerActivate = false;
+bool Hour24TimerActivate = false;
+
+void setup() {
+  Serial.begin(9600); //Check baud rate works 
+  ////Serial.println(F("DHT11 test! Water level test!"));
+  //DHT
+  dht.begin();
+
+  // Water sensor
+  // Setting digital waterSensorPower as digital output and low so power is not constantly running through // moved this to loop
+  pinMode(waterSensorPower,OUTPUT);
+ 
+  // Photoresistor pinMode
+  pinMode(pResistor, INPUT);// Set photoResistor - A1 pin as an input
+
+  // LED pinmode 
+  pinMode(redLEDPin, OUTPUT);
+  pinMode(greenLEDPin, OUTPUT);
+  
+  // IR Reciever
+  irrecv.enableIRIn(); // Start the receiver
+  // LCD
+  lcd.begin(16,2);
+}
+
+void loop() {
+  // Wait a few seconds between measurements. 10 mins = 600000 ms
+  delay(2000);
+
+  // Reading temperature or humidity takes about 250 milliseconds
+  float h = dht.readHumidity();
+  // Read temperature as Celsius 
+  float t = dht.readTemperature();
+ 
+
+  // Check if any reads failed and exit early (to try again).
+  if (isnan(h) || isnan(t) ) {
+  Serial.println(F("Failed to read from DHT sensor!"));
+   return;
+  }
+  
+  // Print to serial monitor
+  Serial.print(F("Humidity: "));
+  Serial.print(h);
+  Serial.print(F("%  Temperature: "));
+  Serial.print(t);
+  Serial.print(F("°C "));
+
+// Water level sensor
+  digitalWrite(waterSensorPower, LOW);
+  int waterLevel = waterSensorFunc();
+  Serial.print("Water level: ");
+  // Roughly 350 values I found just dipping it in water, needs testing in soil
+  Serial.print(waterLevel*100/350);  
+  Serial.print("%");
+  
+  // LED indicator for water level sensor, change 25 to whatever threshold needed
+   if (waterLevel> waterthreshold){
+      digitalWrite(redLEDPin, LOW); //Red LED off
+      digitalWrite(greenLEDPin, HIGH); //Green LED on //Add temperature statement also?
+      digitalWrite(relayPin,LOW);// if water level high, dont activate relay
+  }
+  else{
+      digitalWrite(redLEDPin, HIGH);
+      digitalWrite(greenLEDPin, LOW);
+      digitalWrite(relayPin,HIGH);// Activate relay and power pump if water level low
+  }
+  
+// Photoresistor
+ lightvalue = analogRead(pResistor);
+  // Start 24 hour timer to log daily sunlight values
+  if (Hour24TimerActivate == false){
+    Hour24Start = millis();
+    Hour24TimerActivate = true;
+  }
+  // Once gets to 24 hours reset timer and sunlight time values
+  if (Hour24Start > 86400000 && Hour24TimerActivate == true){ 
+    Serial.println("Total sunlight today: ");
+    Serial.print(sunlightTime);
+    startTime = 0;
+    endTime = 0;
+    Hour24TimerActivate = false;
+    sunlightThisPeriod = 0;
+    Hour24Start = 0;
+  }
+  
+  // Once daylight start sunlight timer
+  if (lightvalue > lightthreshold && timerActivate == false){
+    startTime = millis();
+    timerActivate = true;
+    Serial.print("Start: ");
+    Serial.println(startTime);
+  }
+  // Once night/cloud stop timer and have running total
+  if (lightvalue < lightthreshold && timerActivate == true){
+  endTime = millis();
+  timerActivate = false;
+  //Serial.println("End period: ");
+  //Serial.print(endTime);
+  sunlightThisPeriod = endTime - startTime;
+  //Serial.println("This period: ");
+  //Serial.print(sunlightThisPeriod);
+  sunlightTime += sunlightThisPeriod;
+  sunlightTime = sunlightTime/3600000;  // Convert to hours
+  }
+  
+  // Interface, LCD and Remote
+    if (irrecv.decode(&results)){
+    lcd.clear();
+    switch(results.value) {
+      case 0xFF30CF: // Hex code for keypad button 1
+      Serial.println("1");
+      lcd.setCursor(0,0); // set cursor to column 0, line 1
+      lcd.print("Water LeveL: ");
+      lcd.print(waterLevel);
+      lcd.setCursor(0,1); // set cursor to column 0, line 2
+      if (waterLevel >= waterthreshold) { // 25 is threshold above 
+        lcd.print("Water Level Good");
+      } else if(waterLevel < waterthreshold) {
+        lcd.print("Water Level Low");
+      } 
+      break;
+
+      case 0xFF18E7: // Hex code for keypad button 2
+      Serial.println("2");
+      lcd.setCursor(0,0); // set cursor to column 0, line 1
+      lcd.print("Light Level: ");
+      lcd.print(lightvalue);
+      lcd.setCursor(0,1); // set cursor to column 0, line 2
+      if (lightvalue >= lightthreshold ) {
+        lcd.print("It's Daylight");
+      } else if(lightvalue < lightthreshold) {
+        lcd.print("It's Night");
+      } 
+      break;
+  
+    }
+    irrecv.resume(); // Receive the next value
+  
+  }
+ 
+  delay(1000);
+  
+}
+
+//Get water level function
+int waterSensorFunc() {
+  // Turn the sensor ON, take reading, then turn it off, return reading
+  digitalWrite(waterSensorPower, HIGH); 
+  delay(10);             
+  waterSensorValue = analogRead(waterSensorPin);    
+  digitalWrite(waterSensorPower, LOW);   
+  return waterSensorValue;             
+}
